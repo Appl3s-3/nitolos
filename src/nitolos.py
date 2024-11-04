@@ -1,71 +1,77 @@
+from typing import Callable, Iterable
 import yfinance as yf
+import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import datetime
 
-class Nitolos:
-    def __init__(self, stock: str, start: str, end: str):
-        self.ticker = yf.Ticker(stock)
-        self.data = self.ticker.history(start=start, end=end, interval="1d")['Close'].to_frame()
-        self.strategy_results = []
+class StockData:
+    def __init__(self,
+                 ticker: str,
+                 start: datetime.datetime = None,
+                 ticker_postfix: str = '.ax'):
+        # Check if cached data exists
 
-    def calculate_ema(self, period: int):
-        self.data['EMA' + str(period)] = self.data['Close'].ewm(span=period, adjust=False).mean()
+        # Check if cached data is within desired date range
 
-    def simulate_strategy(self, start: str, end: str, strategy):
-        self.strategy_results.append(strategy(self.data.loc[start:end]))
+        # self.data = pd.
+        self.start_date = start
+        if start is None:
+            start = datetime.datetime.now() - datetime.timedelta(days=365)
 
-    def display_strategy_results(self, index: int = 0):
-        results = self.strategy_results[index]
+        # Obtain data for the desired date range
+        ticker = yf.Ticker(ticker + ticker_postfix)
+        history = ticker.history(start=self.start_date)
 
-        # Print trades
-        print("Trades: ")
-        for trade in results['trades']:
-            print(trade)
+        self.data = history['Close'].to_frame()
 
-        # Print results
-        print("Result: ")
-        print(results['balance'])
+    def __getitem__(self, indicators: tuple) -> tuple:
+        return tuple(self.data[i] for i in indicators)
 
-        # Plot results
-        start_date = results['active_period'][0]
-        end_date = results['active_period'][1]
-        auxiliary_series = results['auxiliary']
+    def preprocess_indicators(self, indicators: Iterable, force: bool = False):
+        for i in indicators:
+            self.preprocess_indicator(i, force)
 
-        fig = plt.figure()
-        self.data['Close'].plot()
-        for series in auxiliary_series:
-            self.data[series].plot()
+    def preprocess_indicator(self, indicator: str, force: bool = False):
+        # Indicator already exists
+        if indicator in self.data.columns and not force:
+            return
 
+        # EMA indicator
+        if indicator.startswith('ema'):
+            ema_period = indicator[3:]
+            if (len(ema_period) == 0
+            or  not ema_period.isnumeric()):
+                print(f"Could not preprocess indicator: {indicator}")
+                return
+
+            self.data[indicator] = self.ind_ema(int(ema_period))
+            
+        # SMA indicator
+        if indicator.startswith('sma'):
+            pass
+
+    def ind_ema(self, period: int) -> pd.Series:
+        ema = self.data['Close'].ewm(span=period, adjust=False).mean()
+        ema[:period] = np.nan
+        return ema
+
+class Strategy:
+    def __init__(self,
+                 buy_signal: Callable,
+                 sell_signal: Callable,
+                 buy_parameters: tuple,
+                 sell_parameters: tuple):
+        self.buy_signal      = buy_signal
+        self.sell_signal     = sell_signal
+        self.buy_parameters  = buy_parameters
+        self.sell_parameters = sell_parameters
+
+    def run(self, data: StockData) -> tuple:
+        # Prepare the required indicators for the strategy
+        data.preprocess_indicators(self.buy_parameters)
+        data.preprocess_indicators(self.sell_parameters)
         
+        buys  = self.buy_signal(*data[self.buy_parameters])
+        sells = self.sell_signal(buys, *data[self.sell_parameters])
 
-    # def simulate(self, start: str, end: str):
-    #     buys = self.buy_order(self.data['EMA20'].loc(start, end),
-    #                           self.data['EMA50'].loc(start, end))
-    #     print(self.data.axes)
-    #     # self.buy_dates = [self.data.axes[i for i in buys]]
-    #     for buy_date in self.buy_dates:
-    #         self.data['buys'][buy_date] = self.data['Close'][buy_date]
-
-    #     sells = self.sell_order(self.data[i].loc(start, end) for i in self.sell_args)
-    #     # self.sell_dates = [self.data.axes[i for i in sells]]
-    #     for sell_date in self.sell_dates:
-    #         self.data['sells'][sell_date] = self.data['Close'][sell_date]
-
-    # def results(self):
-    #     print(f"Buys: {len(self.buy_dates)}")
-    #     print(f"Buy dates: {[i for i in self.buy_dates]}")
-
-    #     print(f"Sells: {len(self.sell_dates)}")
-    #     print(f"Sell dates: {[i for i in self.sell_dates]}")
-
-    def plot(self, *args):
-        fig = plt.figure()
-        self.data['Close'].plot()
-
-        self.data['EMA20'].plot()
-        self.data['EMA50'].plot()
-        # self.data['buys'].plot(kind='o', color='blue')
-        # self.data['sells'].plot(kind='o', color='red')
-
-        plt.show()
-
+        return buys, sells
