@@ -67,7 +67,7 @@ def plot_nested_comparisons(nested_data, group_names=None, title="Group Comparis
     return fig, axes
 
 def new_world_main():
-    show_charts = False
+    show_charts = True
     stock_codes = ["CBA", "NAB", "WAM", "TLC", "DRO", "PLS", "BHP", "NHC", "WAF"]
     results = []
 
@@ -77,109 +77,31 @@ def new_world_main():
         print()
         stock_data = nit.StockData(stock_code, datetime.datetime(2016, 1, 1))
 
+        # Create the strategy
         minis = [
-            solo_mini.SoloMini(10, 20),
-            solo_mini.SoloMini(10, 30),
-            solo_mini.SoloMini(10, 40)
+            solo_mini.SoloMini(10, 20)
         ]
-        mini_names = ["10/20", "10/30", "10/40"]
+        mini_names = ["10/20"]
         for k, mini in enumerate(minis):
             entries, exits = mini.backtest(stock_data, False)
 
-            # Order the interactions
-            interactions = []
-            for i in entries:
-                interactions.append((i, 'b'))
-            for i in exits:
-                interactions.append((i, 's'))
-            interactions.sort(key=lambda x: x[0])
+            # Execute the signals on the stock data
+            value, wins, losses, neutral = nit.execute_signals(entries, exits, stock_data)
 
-            value = 1
-            losses = 0
-            wins = 0
-            neutral = 0
-
-            hold_value = 0
-
-            for date, signal in interactions:
-                # Buy signal
-                if signal == 'b':
-                    # Already holding
-                    if hold_value > 0:
-                        # print("rebought ignored")
-                        continue
-
-                    # Not holding
-                    elif hold_value == 0:
-                        hold_value = stock_data.data.loc[date, 'Close']
-                        # print(f"bought at {hold_value}")
-
-                # Sell signal
-                if signal == 's':
-                    # Not holding
-                    if hold_value == 0:
-                        # print("ignoring invalid sell")
-                        continue
-
-                    # Calculate outcome of sell
-                    outcome = (stock_data.data.loc[date, 'Close'] / hold_value)
-
-                    losses  += int(outcome < 1)
-                    wins    += int(outcome > 1)
-                    neutral += int(outcome == 1)
-
-                    value *= outcome
-                    hold_value = 0
-
-                    # print(f"sold at {data.data.loc[date, 'Close']} for {outcome} result")
-                    # print()
-
+            # Store results
             stock_results.append((mini_names[k], value))
+
+            # Display final values
             print(f"{stock_code.upper()} Final Value: {value:.5f}")
             if neutral > 0:
                 print(f"Wins: {wins}, Losses: {losses}, Neutral: {neutral}")
             else:
                 print(f"| Wins: {wins} | Losses: {losses} |")
 
+            # Plot stock data
             if show_charts:
-                # print("Entries: ", entries)
-                # print("Exits: ", exits)
-
-                # Plot stock data
-                fig = plt.figure()
-                ax = fig.add_subplot()
-                ax.plot(stock_data.data.index,
-                        stock_data.data['Close'],
-                        'k:',
-                        label='Close')
-                ax.plot(stock_data.data.index,
-                        stock_data.data['ema20'],
-                        'g-',
-                        label='ema20')
-                ax.plot(stock_data.data.index,
-                        stock_data.data['ema10'],
-                        'y-',
-                        label='ema10')
-                # ax.plot(pls.data.index,
-                #         pls.data['ema100'],
-                #         'c-',
-                #         label='ema100')
-
-                # Plot buy and sell dates
-                def plot_bs(ax, buys, sells, b_fmt = 'bo', s_fmt = 'ro'):
-                    for i in buys:
-                        ax.plot(pd.Timestamp(i),
-                                stock_data.data['Close'][i],
-                                b_fmt,
-                                markersize=8)
-
-                    for i in sells:
-                        ax.plot(pd.Timestamp(i),
-                                stock_data.data['Close'][i],
-                                s_fmt,
-                                markersize=8)
-
-                plot_bs(ax, entries, exits, 'bo', 'ro')
+                fig, ax = stock_data.plot_indicators(('Close', 'ema20', 'ema10'))
+                fig, ax = stock_data.plot_signals(entries, exits, fig, ax)
 
                 ax.margins(x=0, y=0)
                 ax.grid(True)
@@ -196,7 +118,7 @@ def new_world_main():
 
                 plt.show()
 
-    fig, ax = plot_nested_comparisons(results, group_names=stock_codes)
+    # fig, ax = plot_nested_comparisons(results, group_names=stock_codes)
     plt.show()
     return
 

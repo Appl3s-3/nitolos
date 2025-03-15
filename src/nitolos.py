@@ -5,6 +5,7 @@ import json
 import yfinance as yf
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import numba
 
 class StockData:
@@ -286,7 +287,42 @@ class StockData:
         self.data[indicator_minus] = (self.data[indicator_sma]
                                    -  sd * self.data[indicator_std])
 
+    def plot_indicators(self, indicators: list, fig = None, ax = None, colours: list = None):
+        if fig is None:
+            fig = plt.figure()
+        if ax is None:
+            ax = fig.add_subplot()
 
+        if colours is None:
+            colours = ['k:', 'g-', 'y-', 'b-', 'm-', 'p-', 'r-']
+
+        for i, ind in enumerate(indicators):
+            ax.plot(self.data.index,
+                    self.data[ind],
+                    colours[i],
+                    label=ind)
+        
+        return fig, ax
+
+    def plot_signals(self, entries: list, exits: list, fig = None, ax = None, entry_fmt: str = 'bo', exit_fmt: str = 'ro', markersize: int = 4):
+        if fig is None:
+            fig = plt.figure()
+        if ax is None:
+            ax = fig.add_subplot()
+        
+        for i in entries:
+            ax.plot(pd.Timestamp(i),
+                    self.data['Close'][i],
+                    entry_fmt,
+                    markersize=markersize)
+
+        for i in exits:
+            ax.plot(pd.Timestamp(i),
+                    self.data['Close'][i],
+                    exit_fmt,
+                    markersize=markersize)
+        
+        return fig, ax
 
 
 
@@ -394,3 +430,53 @@ class NitolosTester:
     
     def backtest(self):
         pass
+
+def execute_signals(entries: list, exits: list, stock_data: StockData) -> tuple:
+    # Order the interactions
+    interactions = []
+    for i in entries:
+        interactions.append((i, 'b'))
+    for i in exits:
+        interactions.append((i, 's'))
+    interactions.sort(key=lambda x: x[0])
+
+    value = 1
+    wins = 0
+    losses = 0
+    neutral = 0
+
+    hold_value = 0
+
+    for date, signal in interactions:
+        # Buy signal
+        if signal == 'b':
+            # Already holding
+            if hold_value > 0:
+                # print("rebought ignored")
+                continue
+
+            # Not holding
+            elif hold_value == 0:
+                hold_value = stock_data.data.loc[date, 'Close']
+                # print(f"bought at {hold_value}")
+
+        # Sell signal
+        if signal == 's':
+            # Not holding
+            if hold_value == 0:
+                # print("ignoring invalid sell")
+                continue
+
+            # Calculate outcome of sell
+            outcome = (stock_data.data.loc[date, 'Close'] / hold_value)
+
+            losses  += int(outcome < 1)
+            wins    += int(outcome > 1)
+            neutral += int(outcome == 1)
+
+            value *= outcome
+            hold_value = 0
+
+            # print(f"sold at {data.data.loc[date, 'Close']} for {outcome} result")
+            # print()
+    return value, wins, losses, neutral
