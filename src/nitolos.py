@@ -5,6 +5,7 @@ import json
 import yfinance as yf
 import numpy as np
 import pandas as pd
+import numba
 
 class StockData:
     CACHE_DIR = './cache/'
@@ -41,7 +42,7 @@ class StockData:
 
         # Read from cache
         else:
-            cached_data = pd.read_csv(self.cache_path)
+            cached_data = pd.read_csv(self.cache_path, index_col=0, parse_dates=True)
             cached_info = {}
             with open(self.cache_info_path, 'r') as cache_info:
                 cached_info = json.load(cache_info)
@@ -75,6 +76,10 @@ class StockData:
         self.cache_data()
 
     def __getitem__(self, indicators: tuple) -> tuple:
+        # Return a single indicator if only one is given
+        if isinstance(indicators, str):
+            return self.data[indicators]
+        # Return a tuple of indicators
         return tuple(self.data[i] for i in indicators)
 
     def cache_data(self):
@@ -129,13 +134,28 @@ class StockData:
             return indicator
 
         # True Range
-        if indicator.startswith('tr'):
+        if indicator == 'tr':
             self.data[indicator] = self.ind_tr()
             return indicator
 
-        # Average True Range (in progress)
+        # Average True Range
         if indicator.startswith('atr'):
-            self.data['atr'] = self.ind_atr()
+            self.data[indicator] = self.average_true_range(self.data['High'],
+                                                           self.data['Low'],
+                                                           self.data['Close'],
+                                                           14)
+            return indicator
+
+            # Preprocess TR
+            self.preprocess_indicator('tr')
+
+            atr_period = indicator[3:]
+            if (len(atr_period) == 0
+            or  not atr_period.isnumeric()):
+                print(f"Could not preprocess indicator: {indicator}")
+                return
+            
+            self.data[indicator] = self.ind_atr(int(atr_period))
             return indicator
 
         # Bollinger Bands (in progress)
@@ -168,33 +188,88 @@ class StockData:
               periods: int = 1) -> pd.Series:
         return primary_indicator.diff(periods=periods)
 
+    # def ind_tr(self):
+    #     prev_close = self.data['Close'].shift(periods=1)
+    #     return (np.maximum(self.data['High'], prev_close)
+    #          -  np.minimum(self.data['Low'], prev_close))
+
+
+    @staticmethod
+    def average_true_range(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+        """
+        Calculate the Average True Range (ATR) using pandas for efficiency.
+        
+        Parameters:
+        high (pd.Series): Array of high prices.
+        low (pd.Series): Array of low prices.
+        close (pd.Series): Array of closing prices.
+        period (int): The number of periods to use for ATR calculation (default is 14).
+        
+        Returns:
+        pd.Series: Array containing the ATR values.
+        """
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs()
+        ], axis=1).max(axis=1)
+        
+        atr = tr.ewm(span=period, adjust=False).mean()
+        
+        return atr
+
+
+    
+    @staticmethod
+    @numba.njit(fastmath=True, parallel=True)
+    def compute_tr(high, low, close):
+        tr = np.maximum(high - low, 
+                        np.maximum(np.abs(high - close), 
+                                   np.abs(low - close)))
+        return tr
+
+    @staticmethod
+    @numba.njit(fastmath=True, parallel=True)
+    def compute_atr(tr, period):
+        atr = np.empty_like(tr, dtype=np.float64)
+        atr[0] = np.mean(tr[:period])  # Initial ATR value
+        
+        for i in numba.prange(1, len(tr)):
+            atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period  # Smoothed ATR formula
+    
+        return atr
+    
     def ind_tr(self):
         prev_close = self.data['Close'].shift(periods=1)
-        return (np.maximum(self.data['High'], prev_close)
-             -  np.minimum(self.data['Low'], prev_close))
+        return self.compute_tr(self.data['High'].to_numpy(),
+                               self.data['Low'].to_numpy(),
+                               prev_close.to_numpy())
 
     def ind_atr(self, period: int = 14):
-        # Standard ATR calculation
-        # self.data['atr'] = np.nan
-        # self.data.loc[13, 'atr'] = np.mean(self.data['tr'].iloc[:14])
+        return self.compute_atr(self.data['tr'].to_numpy(), period)
 
-        # i = 14
-        # end = self.data.shape[0]
+    # def ind_atr(self, period: int = 14):
+    #     # Standard ATR calculation
+    #     # self.data['atr'] = np.nan
+    #     # self.data.loc[13, 'atr'] = np.mean(self.data['tr'].iloc[:14])
 
-        # print("began standard atr")
-        # while i < end:
-        #     self.data.loc[i, 'atr'] = (self.data['atr'].iloc[i - 1] * period + self.data['tr'].iloc[i]) / period
-        #     i += 1
-        # print("finished standard atr")
+    #     # i = 14
+    #     # end = self.data.shape[0]
 
-        # Custom ATR calculation
-        # print("begin custom atr")
-        atr = self.data['tr'].ewm(alpha=1 / period,
-                                         adjust=False,
-                                         min_periods=period).mean()
-        # custom_atr[:period] = np.nan
-        # print("end custom atr")
-        return atr
+    #     # print("began standard atr")
+    #     # while i < end:
+    #     #     self.data.loc[i, 'atr'] = (self.data['atr'].iloc[i - 1] * period + self.data['tr'].iloc[i]) / period
+    #     #     i += 1
+    #     # print("finished standard atr")
+
+    #     # Custom ATR calculation
+    #     # print("begin custom atr")
+    #     atr = self.data['tr'].ewm(alpha=1 / period,
+    #                                      adjust=False,
+    #                                      min_periods=period).mean()
+    #     # custom_atr[:period] = np.nan
+    #     # print("end custom atr")
+    #     return atr
 
     def generate_ind_boll(self, period: int = 20, sd: float = 2, sd_period: int = -1):
         if sd_period < 0:
@@ -211,6 +286,13 @@ class StockData:
         self.data[indicator_minus] = (self.data[indicator_sma]
                                    -  sd * self.data[indicator_std])
 
+
+
+
+
+"""
+Mostly abandoned
+"""
 class Strategy:
     def __init__(self,
                  buy_signal: Callable,
@@ -287,3 +369,28 @@ class Strategy:
         # print(f"Wins: {wins}, Losses: {losses}, Neutral: {neutral}")
         
         return buys, sells, value
+
+class StopLoss:
+    def atr_long(entry_price: float,
+                 atr_value: float,
+                 multiplier: float = 3) -> float:
+        """
+        Calculate ATR-based stop loss level.
+        
+        Parameters:
+        entry_price (float): The entry price of the trade.
+        atr_value (float): The ATR value for the given period.
+        multiplier (float): The ATR multiplier to determine stop loss distance.
+        
+        Returns:
+        float: The stop loss price.
+        """
+        return entry_price - atr_value * multiplier
+
+class NitolosTester:
+    def __init__(self, strategy, ranges: tuple):
+        self.strategy = strategy
+        self.ranges = ranges
+    
+    def backtest(self):
+        pass

@@ -1,5 +1,10 @@
 import pandas as pd
 
+"""
+This is the long term ema strategy proposed by Solotin.
+It is also the first strategy Solotin proposed.
+"""
+
 def buy(ema_small: pd.Series,
         ema_large: pd.Series,
         close: pd.Series) -> list:
@@ -71,4 +76,3 @@ def sell(buys: list,
         i += 1
 
     return sells
-
