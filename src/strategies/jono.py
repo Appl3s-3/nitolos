@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 # def buy(close: pd.Series) -> list:
 #     buys = []
 
